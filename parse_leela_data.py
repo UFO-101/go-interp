@@ -121,8 +121,9 @@ class Dataset:
         move_probs: List[np.ndarray] = []
         outcomes: List[int] = []
         self.raw_datapoints: List[List[str]] = []
-        with ProcessPoolExecutor() as executor:
-            for data in executor.map(get_data_from_file, filenames):
+        # with ProcessPoolExecutor() as executor:
+            # for data in executor.map(get_data_from_file, filenames):
+        for data in map(get_data_from_file, filenames):
                 f_stone_planes, f_turn_planes, f_move_probs, f_outcomes = data
                 stone_planes.extend(f_stone_planes)
                 turn_planes.extend(f_turn_planes)

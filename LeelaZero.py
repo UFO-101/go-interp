@@ -73,30 +73,31 @@ class ConvBlock(nn.Module):
         # initializations
         nn.init.kaiming_normal_(self.conv.weight, mode="fan_out", nonlinearity="relu")
 
-    def forward(self, x):
-        x = self.conv(x)
-        x = self.bn(x)
-        x += self.beta.view(1, self.bn.num_features, 1, 1).expand_as(x)
-        return F.relu(x, inplace=True) if self.relu else x
+    def forward(self, input, leaky_relu: bool = False):
+        a = self.conv(input)
+        b = self.bn(a)
+        c = b + self.beta.view(1, self.bn.num_features, 1, 1).expand_as(b)
+        if leaky_relu:
+            return F.leaky_relu(c) if self.relu else c
+        else:
+            return F.relu(c) if self.relu else c
 
 
+# *Residualified* residual block
 class ResBlock(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, residualify: bool = False):
+    def __init__(self, in_channels: int, out_channels: int):
         super().__init__()
         self.conv1 = ConvBlock(in_channels, out_channels, 3)
         self.conv2 = ConvBlock(out_channels, out_channels, 3, relu=False)
-        self.residualify = residualify
 
-    def forward(self, x):
+    def forward(self, x, leaky_relu: bool = False):
         identity = x
-        out = self.conv1(x)
-        out = self.conv2(out)
-        if self.residualify:
-            return torch.where(identity + out > 0, out, -identity)
+        mid = self.conv1(x, leaky_relu=leaky_relu)
+        out = self.conv2(mid)
+        if leaky_relu:
+            return torch.where(identity + out > 0, out, -identity * 0.99), mid
         else:
-            out += identity
-            return F.relu(out, inplace=True)
-
+            return torch.where(identity + out > 0, out, -identity), mid
 
 class Network(nn.Module):
     def __init__(
@@ -105,13 +106,12 @@ class Network(nn.Module):
         in_channels: int,
         residual_channels: int,
         residual_layers: int,
-        residualify: bool=False,
     ):
         super().__init__()
         self.conv_input = ConvBlock(in_channels, residual_channels, 3)
         self.residual_tower = nn.Sequential(
             *[
-                ResBlock(residual_channels, residual_channels, residualify)
+                ResBlock(residual_channels, residual_channels)
                 for _ in range(residual_layers)
             ]
         )
@@ -122,34 +122,36 @@ class Network(nn.Module):
         self.value_conv = ConvBlock(residual_channels, 1, 1)
         self.value_fc_1 = nn.Linear(board_size * board_size, 256)
         self.value_fc_2 = nn.Linear(256, 1)
-        self.residualify = residualify
 
-    def forward(self, planes, get_layer_activations=None):
+    def forward(self, planes, leaky_relu: bool = False):
+        activations = []
+        block_activations = []
+
         # first conv layer
-        x = self.conv_input(planes)
-        if get_layer_activations == -1:
-            layer_activations = x
+        x = self.conv_input(planes, leaky_relu=leaky_relu)
+        activations.append(x.detach().clone())
 
         # residual tower
-        for i, layer in enumerate(self.residual_tower):
-            layer_output = layer(x)
-            if i == get_layer_activations:
-                layer_activations = layer_output
-            if self.residualify:
-                x = x + layer_output
-            else:
-                x = layer_output
+        for layer in self.residual_tower:
+            layer_output, intermediate = layer(x, leaky_relu=leaky_relu)
+            # block_activations.append(intermediate.detach().clone())
+            block_activations.append(layer_output.detach().clone())
+            x = x + layer_output
+            activations.append(x.detach().clone())
 
         # policy head
-        pol = self.policy_conv(x)
+        pol = self.policy_conv(x, leaky_relu=leaky_relu)
         pol = self.policy_fc(torch.flatten(pol, start_dim=1))
 
         # value head
-        val = self.value_conv(x)
-        val = F.relu(self.value_fc_1(torch.flatten(val, start_dim=1)), inplace=True)
+        val = self.value_conv(x, leaky_relu=leaky_relu)
+        if leaky_relu:
+            val = F.leaky_relu(self.value_fc_1(torch.flatten(val, start_dim=1)), inplace=True)
+        else:
+            val = F.relu(self.value_fc_1(torch.flatten(val, start_dim=1)), inplace=True)
         val = torch.tanh(self.value_fc_2(val))
 
-        return pol, val, None if get_layer_activations is None else layer_activations
+        return pol, val, torch.stack(activations), torch.stack(block_activations)
 
     def to_leela_weights(self, filename: str):
         """

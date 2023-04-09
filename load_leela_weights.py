@@ -8,8 +8,10 @@ from LeelaZero import Network
 import importlib
 
 #%%
+import LeelaZero
 importlib.reload(LeelaZero)
 from LeelaZero import Network
+import requests
 
 url = "https://zero.sjeng.org/best-network"
 # url = "https://github.com/yukw777/leela-zero-pytorch/raw/master/weights/leela-zero-pytorch-sm.txt"
@@ -55,58 +57,3 @@ network.from_leela_weights(filename)
 #%%
 # Save the network to a file
 torch.save(network.state_dict(), ".cache/best-network.pt")
-# %%
-
-# Old code I wrote to load from SGF. Probably redundant now.
-#%%
-with open("MeVsLeela.sgf", "rb") as f:
-    game = sgf.Sgf_game.from_bytes(f.read())
-board = boards.Board(game.get_size())
-
-black_tensors = []
-white_tensors = []
-color = 'b'
-for node in game.main_sequence_iter():
-    color, move = node.get_move()
-    if move is not None:
-        board.play(move[0], move[1], color)
-    board_array = np.array(board.board)
-    white_tensors.append(torch.from_numpy((board_array == 'w').astype(np.float32)))
-    black_tensors.append(torch.from_numpy((board_array == 'b').astype(np.float32)))
-
-input_tensors = []
-side_to_move_tensors = white_tensors if color == 'b' else black_tensors
-for i in range(8):
-    try:
-        input_tensors.append(side_to_move_tensors[-1 - i])
-    except IndexError:
-        input_tensors.append(torch.zeros(game.get_size(), game.get_size()))
-other_size_tensors = black_tensors if color == 'b' else white_tensors
-for i in range(8):
-    try:
-        input_tensors.append(other_size_tensors[-1 - i])
-    except IndexError:
-        input_tensors.append(torch.zeros(game.get_size(), game.get_size()))
-
-if color == 'b':
-    input_tensors.append(torch.zeros(game.get_size(), game.get_size()))
-    input_tensors.append(torch.ones(game.get_size(), game.get_size()))
-else:
-    input_tensors.append(torch.ones(game.get_size(), game.get_size()))
-    input_tensors.append(torch.zeros(game.get_size(), game.get_size()))
-
-input = torch.stack(input_tensors, dim=0).unsqueeze(0).to(device)
-print('input', input.shape)
-
-network.to(device)
-network.eval()
-pol, val = network(input)
-
-print('pol', pol)
-print('val', val)
-
-
-x, y = pol[0].argmax() % game.get_size(), pol[0].argmax() // game.get_size()
-print('best move - x:', x, 'y:', y)
-print('board value', val.item())
-# %%
