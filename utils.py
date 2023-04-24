@@ -3,12 +3,12 @@ import torch
 import torchvision
 import plotly.express as px
 
-def print_go_board_tensor(tensor, turn_number, show_n_turns_past=0, only_to_play=False, coords=None):
+def print_go_board_tensor(tensor, color, show_n_turns_past=0, only_to_play=False, coords=None):
     tensor = tensor[0] if isinstance(tensor, tuple) else tensor
     tensor = tensor.squeeze()
     assert isinstance(coords, list) or coords is None
-    color_to_play = 'b' if turn_number % 2 == 0 else 'w'
-    print("Color to play:", color_to_play)
+    color = color if isinstance(color, str) else ('b' if color % 2 == 0 else 'w')
+    print("Color to play:", color)
     for i in reversed(range(19)):
         for j in range(19):
             if coords is not None and (j, i) in coords:
@@ -20,9 +20,9 @@ def print_go_board_tensor(tensor, turn_number, show_n_turns_past=0, only_to_play
                 white_symbol = "⚪"
                 empty_symbol = "➕"
             if tensor[0 + show_n_turns_past][i][j] == 1:
-                print(black_symbol, end="") if color_to_play == 'b' else print(white_symbol, end="")
+                print(black_symbol, end="") if color == 'b' else print(white_symbol, end="")
             elif tensor[8 + show_n_turns_past][i][j] == 1 and not only_to_play:
-                print(white_symbol, end="") if color_to_play == 'b' else print(black_symbol, end="")
+                print(white_symbol, end="") if color == 'b' else print(black_symbol, end="")
             else:
                 print(empty_symbol, end="")
         print()
@@ -36,13 +36,13 @@ def custom_make_grid(tensor, border=0):
 
 def leq_4d_to_grid(tensor):
     assert len(tensor.shape) <= 4
-    layers, border = [], torch.min(tensor).item()
+    layers, border = [], torch.min(tensor).item() * 1.1
     for i in range(tensor.shape[0]):
         grid, _, _, _ = custom_make_grid(tensor[i], border=border)
         layers.append(grid)
     return custom_make_grid(torch.stack(layers), border=border)
 
-def display_tensor_grid(activations, title=None, animate=False):
+def display_tensor_grid(activations, title=None, animate=False, filename=None):
     print('displaying tensor grid:', activations.shape)
     activations = activations.detach().clone().squeeze()
     assert len(activations.shape) <= 4 or (len(activations.shape) == 5 and animate)
@@ -69,10 +69,13 @@ def display_tensor_grid(activations, title=None, animate=False):
             tickmode='array',
             tickvals=list(range(int(h / 2), grid_h, h)),
             ticktext=list(range(0, grid_h * nrow, nrow)),
-        ),
-        margin=dict(l=0, r=105, t=0, b=0, pad=0),
+        )
     )
-    fig.show()
+    if filename is None:
+        fig.update_layout(margin=dict(l=0, r=105, t=0, b=0, pad=0))
+        fig.show()
+    else:
+        fig.write_html(filename, auto_play=False, include_plotlyjs='cdn')
 
 def tensor_symmetries(x):
     x = x.squeeze()

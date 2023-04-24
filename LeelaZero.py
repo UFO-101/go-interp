@@ -124,12 +124,12 @@ class Network(nn.Module):
         self.value_fc_2 = nn.Linear(256, 1)
 
     def forward(self, planes, leaky_relu: bool = False):
-        activations = []
+        resids = []
         block_activations = []
 
         # first conv layer
         x = self.conv_input(planes, leaky_relu=leaky_relu)
-        activations.append(x.detach().clone())
+        resids.append(x.detach().clone())
 
         # residual tower
         for layer in self.residual_tower:
@@ -137,7 +137,7 @@ class Network(nn.Module):
             # block_activations.append(intermediate.detach().clone())
             block_activations.append(layer_output.detach().clone())
             x = x + layer_output
-            activations.append(x.detach().clone())
+            resids.append(x)
 
         # policy head
         pol = self.policy_conv(x, leaky_relu=leaky_relu)
@@ -151,7 +151,7 @@ class Network(nn.Module):
             val = F.relu(self.value_fc_1(torch.flatten(val, start_dim=1)), inplace=True)
         val = torch.tanh(self.value_fc_2(val))
 
-        return pol, val, torch.stack(activations), torch.stack(block_activations)
+        return pol, val, torch.stack(resids), torch.stack(block_activations)
 
     def to_leela_weights(self, filename: str):
         """

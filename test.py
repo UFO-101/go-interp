@@ -1,4 +1,5 @@
 #%%
+import os
 import torch
 import LeelaZero
 from parse_leela_data import Dataset
@@ -19,31 +20,49 @@ network.eval()
 network.to(device)
 print("LeelaZero.Network loaded.")
 #%%
-pos_infos = [("leelaoutput", 294, (2, 11)), ("better-long-range-atari", 50, (9, 15)), ("spiral-atari-1", 162, (3, 9))]
 inputs = []
-points, point_indices = [], []
-for filename, turn, coords in pos_infos:
-    input = Dataset([f"game-data/{filename}.txt.0.gz"])[turn][0]
-    print_go_board_tensor(input, turn, coords=[coords])
-    inputs.append(tensor_symmetries(input))
-    points.extend(point_symmetries(*coords)[0])
-    point_indices.extend(point_symmetries(*coords)[1])
-inputs = torch.cat(inputs).to(device)
+# pos_infos = [("leelaoutput", 294, (2, 11)), ("better-long-range-atari", 50, (9, 15)), ("spiral-atari-1", 162, (3, 9))]
+# points, point_indices = [], []
+# for filename, turn, coords in pos_infos:
+#     input = Dataset([f"game-data/{filename}.txt.0.gz"])[turn][0]
+#     print_go_board_tensor(input, turn, coords=[coords])
+#     inputs.append(tensor_symmetries(input))
+#     points.extend(point_symmetries(*coords)[0])
+#     point_indices.extend(point_symmetries(*coords)[1])
+# inputs = torch.cat(inputs).to(device)
+
+directory = "game-data"
+# filenames = os.listdir(directory)
+filenames = ["adv-attack/connection_test_realgame2_a_wturn.txt.0.gz", "adv-attack/connection_test_realgame2_b_wturn.txt.0.gz"]
+for filename in filenames: # + ["spiral-atari-1.txt.0.gz"]:
+    print("filename", filename)
+    input = Dataset([f"{directory}/{filename}"], fill_blanks=True)
+    print("len input", len(input))
+    input = input[len(input) - 1][0]
+    print("input", input.shape)
+    color_to_play = "w" if "wturn" in filename else "b"
+    print_go_board_tensor(input, color_to_play)
+    display_tensor_grid(input)
+    inputs.append(input)
+inputs = torch.stack(inputs).requires_grad_(False).to(device)
 #%%
 # SHOW ACTIVATIONS and POLICY
 network.eval()
 pol, val, activations, _ = network(inputs, leaky_relu=False)
 print('activations', activations.shape)
-display_tensor_grid(activations[:, 16], animate=True)
+for i, filename in enumerate(filenames):
+    name_prefix = filename.split(".")[0]
+    # display_tensor_grid(activations[:, i], animate=True, title=name_prefix,
+                        # filename=f"output_figs/{name_prefix}.html")
 
-print("POLICY 0")
-px.imshow(pol[0][:-1].reshape(19, 19).cpu().detach().numpy(), origin="lower").show()
-print(f'Board value: {((1 + val[0].item()) / 2.0) * 100}%')
-print("POLICY 1")
-px.imshow(pol[1][:-1].reshape(19, 19).cpu().detach().numpy(), origin="lower").show()
-print("POLICY 10")
-px.imshow(pol[10][:-1].reshape(19, 19).cpu().detach().numpy(), origin="lower").show()
+activations_diff = activations[:, 0] - activations[:, 1]
+display_tensor_grid(activations_diff, animate=True, title="activations diff",
+                    filename=f"output_figs/realgame2_activations_diff.html")
 
+for i in range(2):
+    print("POLICY", i)
+    px.imshow(pol[i][:-1].view(19, 19).cpu().detach().numpy(), origin="lower").show()
+    print(f'Board value: {((1 + val[i].item()) / 2.0) * 100}%')
 #%%
 # GRADIENT PROBE
 grad_network = LeelaZero.Network(19, 18, channel_count, layer_count)
@@ -84,69 +103,73 @@ fig.show()
 
 #%%
 # activation patching setup
-atari_turn = 50
-print_go_board_tensor(dataset[atari_turn], atari_turn, show_n_turns_past=0, only_to_play=false)
-safe_turn = 54
-print_go_board_tensor(dataset[safe_turn], safe_turn, show_n_turns_past=0, only_to_play=false)
-atari_input = dataset[atari_turn][0].unsqueeze(0).to(device).requires_grad_(false)
-safe_input = dataset[safe_turn][0].unsqueeze(0).to(device).requires_grad_(false)
-atari_pol_unpatched, _, _ = network(atari_input)
-safe_pol_unpatched, _, _ = network(safe_input)
-atari_escape_coords = (9, 15)
-atari_escape_index = atari_escape_coords[1] * 19 + atari_escape_coords[0]
+corrupted_input = inputs[0].unsqueeze(0).to(device).requires_grad_(False)
+print_go_board_tensor(corrupted_input, color="w")
+clean_input = inputs[1].unsqueeze(0).to(device).requires_grad_(False)
+print_go_board_tensor(clean_input, color="w")
+clean_pol_no_patch, clean_val_no_patch, _, _ = network(clean_input)
+corrupted_pol_no_patch, corrupted_val_no_patch, _, _ = network(corrupted_input)
+# atari_escape_coords = (9, 15)
+# atari_escape_index = atari_escape_coords[1] * 19 + atari_escape_coords[0]
 
-def plot_atari_escape_pol(*args, **kwargs):
-    fig = px.line(*args, **kwargs)
-    fig.add_hline(y=atari_pol_unpatched[0, atari_escape_index].item(), line_dash="dash", annotation_text="atari policy")
-    fig.add_hline(y=safe_pol_unpatched[0, atari_escape_index].item(), line_dash="dash", annotation_text="safe policy")
+def plot_patch_results(*args, bar=False, **kwargs):
+    if bar:
+        fig = px.bar(*args, **kwargs)
+    else:
+        fig = px.line(*args, **kwargs)
+    fig.add_hline(y=(corrupted_val_no_patch.item() + 1) / 2 * 100, line_dash="dash", annotation_text="Cycle, no patch")
+    fig.add_hline(y=(clean_val_no_patch.item() + 1) / 2 * 100, line_dash="dash", annotation_text="Broken cycle, no patch")
     fig.show()
 
 #%%
 # layer patching
 network.eval()
-layer_patching_vals = []
-for layer_index in range(layer_count):
-    atari_policy, _, atari_activations = network(atari_input, get_layer_activations=layer_index)
-    patch_hook = lambda module, input, output: atari_activations
-    handle = network.residual_tower[layer_index].register_forward_hook(patch_hook)
+patched_vals = []
+clean_policy, clean_val, clean_resid, clean_block_outs = network(clean_input)
+print("clean_block_outs", clean_block_outs.shape)
+for lyr_idx in range(layer_count):
+    patch_hook = lambda m, i, o: (clean_block_outs[lyr_idx], None)
+    handle = network.residual_tower[lyr_idx].register_forward_hook(patch_hook)
     try:
         with torch.inference_mode():
-            pol, val, _ = network(safe_input)
-            layer_patching_vals.append(pol[0, atari_escape_index].item())
+            pol, val, _, _ = network(corrupted_input)
+            patched_vals.append((val.item() + 1) / 2 * 100)
     finally:
         handle.remove()
         pass
-
-plot_atari_escape_pol(y=layer_patching_vals, labels={'x': 'Layer', 'y': 'Policy'})
+plot_patch_results(y=patched_vals, labels={'x': 'Layer', 'y': 'Board value'}, title="Patching broken cycle into cycle, by layer (residualified)")
 #%%
 # CHANNEL PATCHING
 network.eval()
-def patch_activations(module, input, output, atari_activations, channel):
+def patch_activations(module, input, output, clean_block_outs, layer, channel):
     # Replace output with atari_activations at the given channel.
-    output[:, channel] = atari_activations[:, channel]
+    output[0][:, channel] = clean_block_outs[layer, :, channel]
     return output
 
 # Create a pandas dataframe. Each row is a layer, each column is a channel.
-layer_and_channel_patching_vals = pd.DataFrame(columns=range(channel_count))
-for layer_index in range(layer_count):
-    _, _, atari_activations = network(atari_input, get_layer_activations=layer_index)
-    for channel_index in range(channel_count):
-        patch_hook = lambda m, i, o: patch_activations(m, i, o, atari_activations, channel_index)
-        handle = network.residual_tower[layer_index].register_forward_hook(patch_hook)
-        try:
-            with torch.inference_mode():
-                pol, val, _ = network(safe_input)
-                # layer_and_channel_patching_vals[layer_index].append(pol[0, atari_escape_index].item())
-                layer_and_channel_patching_vals.loc[layer_index, channel_index] = pol[0, atari_escape_index].item()
-        finally:
+_, _, _, clean_block_outs = network(clean_input)
+# layer_chan_patch_vals = pd.DataFrame(columns=range(channel_count))
+patched_vals = []
+for chan_idx in range(channel_count):
+    handles = []
+    for lyr_idx in range(layer_count):
+        patch_hook = lambda m, i, o: patch_activations(m, i, o, clean_block_outs, lyr_idx, chan_idx)
+        handle = network.residual_tower[lyr_idx].register_forward_hook(patch_hook)
+        handles.append(handle)
+    try:
+        with torch.inference_mode():
+            pol, val, _, _ = network(corrupted_input)
+            # layer_chan_patch_vals.loc[chan_idx] = (val.item() + 1) / 2 * 100
+            patched_vals.append((val.item() + 1) / 2 * 100)
+    finally:
+        for handle in handles:
             handle.remove()
-            pass
+        pass
 
-plot_atari_escape_pol(layer_and_channel_patching_vals, labels={'x': 'Layer', 'y': 'Policy', 'color': 'Channel'}, title=f'Channel Patching by Layer (residualified: {residualify})')
+plot_patch_results(bar=True, y=patched_vals, labels={'x': 'Channel', 'y': 'Board value'}, title=f'Patching broken cycle into cycle, by channel (at every layer) (residualified)')
 
 #%%
 # TRAIN the INPUT to maximize a neuron's activation
-
 class ParseTrainedInput(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -162,51 +185,44 @@ class ParseTrainedInput(torch.nn.Module):
         input = torch.cat((layer_0, layers_1_7, layer_8, layers_9_15, layer_16, layer_17), dim=0).unsqueeze(0)
         threshold = 0.8
         rounded_input = torch.where(input > threshold, torch.ones_like(input), torch.zeros_like(input))
+        # input = tensor_symmetries(input) # 8 symmetries
         return input, rounded_input
 
-# class ParseTrainedInput(torch.nn.Module):
-#     def __init__(self):
-#         super().__init__()
-#     def forward(self, x):
-#         x = (torch.nn.functional.tanh(x) + 1) / 2
-#         x = torch.cat([x, torch.ones((1, 1, 19, 19)), torch.zeros((1, 1, 19, 19))], dim=1)
-#         return x
-
-trained_input = torch.full((19, 19), 0.0, requires_grad=True, device=device) #, fill_value=0.0)
-# trained_input = torch.full((1, 16, 19, 19), fill_value=-2.0, requires_grad=True, device=device)
+trained_input = torch.randn((19, 19), requires_grad=True, device=device) #, fill_value=0.0)
 parser = ParseTrainedInput()
 optimizer = torch.optim.Adam([trained_input], lr=0.2)
-neuron_layer, neuron_channel = 25, 166 # layer -1 for input_cov
+neuron_layer, neuron_channel = 10, 1 # layer -1 for input_cov
 # coords = torch.tensor([(2, 15), (3, 15), (4, 15), (5, 15)], dtype=torch.long, device=device)
-# 1.4892 - 1.4893
-
-
-coords = [(2, 15)]
-coords_tensor = torch.tensor(coords, dtype=torch.long, device=device)
+# coords = [(2, 15)]
+# coords = point_symmetries(2, 15)[0]
+# print("coords", coords)
+# coords_tensor = torch.tensor(coords, dtype=torch.long, device=device)
 loss_history = []
-torch.autograd.set_detect_anomaly(True)
-network.eval()
+other_activations_history = []
+network.train()
 
-print(f"Optimising for layer {neuron_layer}, channel {neuron_channel}, coords {coords}")
-for i in range(100):
+print(f"Optimising for layer {neuron_layer}, channel {neuron_channel}, coords {None}")
+for i in range(5000):
     optimizer.zero_grad()
     input, rounded_input = parser(trained_input)
-    # input = parser(trained_input)
-    pol, val, activations = network(input, neuron_layer, leaky_relu=False)
-    channel_activations = activations[0, neuron_channel]
-    coords_activations = channel_activations[tuple(coords_tensor[:, 1]), tuple(coords_tensor[:, 0])]
-    # other_activations = torch.sum(activations) - torch.sum(coords_activations)
-    loss = -torch.sum(coords_activations)
-    # other_activations = torch.sum(activations) - torch.sum(coords_activations)
-    # loss = other_activations * 0.01 - torch.mean(coords_activations)
+    _, _, resids, _ = network(input)
+    channel_activations = resids[neuron_layer + 1, :, neuron_channel]
+    # coords_activations = channel_activations[tuple(range(len(coords))), tuple(coords_tensor[:, 1]), tuple(coords_tensor[:, 0])]
+    # print("coords activations", coords_activations.shape)
+    # other_activations = torch.sum(resids[neuron_layer + 1]) - torch.sum(coords_activations)
+    loss = -torch.sum(channel_activations)
+    # other_activations = torch.sum(resids[neuron_layer + 1]) - torch.sum(channel_activations)
+    # loss = other_activations * 0.0005 - torch.mean(channel_activations)
     loss_history.append(loss.item())
+    # other_activations_history.append(-other_activations.item())
     loss.backward()
     optimizer.step()
 
-display_tensor_grid(activations)
+display_tensor_grid(resids[neuron_layer + 1, 0])
 print("TRAINED INPUT")
 px.imshow(trained_input.detach().cpu().numpy(), origin="lower").show()
-print_go_board_tensor(rounded_input, 0, coords=coords)
+print_go_board_tensor(rounded_input, 'b', coords=None)
 # show_layer_activations(parser(trained_input), boards_width=4, boards_height=5)
 px.line(loss_history, height=300).show()
+px.line(other_activations_history, height=300).show()
 # %%

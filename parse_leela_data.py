@@ -11,6 +11,7 @@ from typing import Tuple, List, Optional
 from itertools import cycle
 from concurrent.futures import ProcessPoolExecutor
 from torch.utils.data import DataLoader
+from functools import partial
 
 logger = logging.getLogger(__name__)
 
@@ -57,12 +58,13 @@ def hex_to_ndarray(hex: str) -> np.ndarray:
 
 
 def get_data_from_file(
-    fname: str,
+    fname: str, fill_blanks: bool = True
 ) -> Tuple[List[np.ndarray], List[int], List[np.ndarray], List[int]]:
     stone_planes: List[np.ndarray] = []
     turn_planes: List[int] = []
     move_probs: List[np.ndarray] = []
     outcomes: List[int] = []
+    prev_line = ""
     with gzip.open(fname, "rt") as f:
         for i in cycle(range(19)):
             try:
@@ -70,7 +72,10 @@ def get_data_from_file(
             except StopIteration:
                 break
             if i < 16:
-                stone_planes.append(hex_to_ndarray(line))
+                # Check if line is just zeros
+                if not all(char == "0" for char in line) or not fill_blanks:
+                    prev_line = line
+                stone_planes.append(hex_to_ndarray(prev_line))
             elif i == 16:
                 turn_planes.append(int(line))
             elif i == 17:
@@ -114,7 +119,7 @@ def transform_move_prob_plane(
 
 
 class Dataset:
-    def __init__(self, filenames: List[str], transform: bool = False):
+    def __init__(self, filenames: List[str], transform: bool = False, fill_blanks: bool = True):
         self.transform = transform
         stone_planes: List[np.ndarray] = []
         turn_planes: List[int] = []
@@ -123,7 +128,8 @@ class Dataset:
         self.raw_datapoints: List[List[str]] = []
         # with ProcessPoolExecutor() as executor:
             # for data in executor.map(get_data_from_file, filenames):
-        for data in map(get_data_from_file, filenames):
+        map_data = partial(get_data_from_file, fill_blanks=fill_blanks)
+        for data in map(map_data, filenames):
                 f_stone_planes, f_turn_planes, f_move_probs, f_outcomes = data
                 stone_planes.extend(f_stone_planes)
                 turn_planes.extend(f_turn_planes)
@@ -146,6 +152,7 @@ class Dataset:
 
         # prepare the turn planes
         input_planes.extend(turn_plane(self.turn_planes[idx]))
+
 
         # stack all the planes
         stacked_input = torch.stack(input_planes)
