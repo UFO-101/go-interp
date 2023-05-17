@@ -1,6 +1,6 @@
-# Based on https://github.com/yukw777/leela-zero-pytorch
+# Based on https://github.com/yukw777/leela-zero-pyt
 import gzip
-import torch
+import torch as t
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -45,7 +45,7 @@ class ConvBlock(nn.Module):
 
     In Tensorflow, you can tell the batch norm layer to ignore just the gamma term
     by calling `tf.layers.batch_normalization(scale=False)` and be done with it.
-    Unfortunately, in PyTorch you can't set batch normalization layers to ignore only
+    Unfortunately, in Pyt you can't set batch normalization layers to ignore only
     `gamma`; you can only ignore both `gamma` and `beta` by setting the affine
     parameter to False: `BatchNorm2d(out_channels, affine=False)`. So, ConvBlock sets
     batch normalization to ignore both, then simply adds a tensor after, which
@@ -67,7 +67,7 @@ class ConvBlock(nn.Module):
             bias=False,
         )
         self.bn = nn.BatchNorm2d(out_channels, affine=False)
-        self.beta = nn.Parameter(torch.zeros(out_channels))  # type: ignore
+        self.beta = nn.Parameter(t.zeros(out_channels))  # type: ignore
         self.relu = relu
 
         # initializations
@@ -95,9 +95,9 @@ class ResBlock(nn.Module):
         mid = self.conv1(x, leaky_relu=leaky_relu)
         out = self.conv2(mid)
         if leaky_relu:
-            return torch.where(identity + out > 0, out, -identity * 0.99), mid
+            return t.where(identity + out > 0, out, -identity * 0.99), mid
         else:
-            return torch.where(identity + out > 0, out, -identity), mid
+            return t.where(identity + out > 0, out, -identity), mid
 
 class Network(nn.Module):
     def __init__(
@@ -123,35 +123,38 @@ class Network(nn.Module):
         self.value_fc_1 = nn.Linear(board_size * board_size, 256)
         self.value_fc_2 = nn.Linear(256, 1)
 
-    def forward(self, planes, leaky_relu: bool = False):
+    def forward(self, x, leaky_relu:bool=False, input_block:int=0):
         resids = []
-        block_activations = []
+        block_outputs = []
+        mid_block = []
 
         # first conv layer
-        x = self.conv_input(planes, leaky_relu=leaky_relu)
-        resids.append(x.detach().clone())
+        if input_block <= 0: 
+            x = self.conv_input(x, leaky_relu=leaky_relu)
+            resids.append(x.detach().clone())
 
         # residual tower
-        for layer in self.residual_tower:
+        for layer in self.residual_tower[input_block:]:
             layer_output, intermediate = layer(x, leaky_relu=leaky_relu)
-            # block_activations.append(intermediate.detach().clone())
-            block_activations.append(layer_output.detach().clone())
+            # block_outputs.append(intermediate.detach().clone())
+            block_outputs.append(layer_output.detach().clone())
+            mid_block.append(intermediate.detach().clone())
             x = x + layer_output
             resids.append(x)
 
         # policy head
         pol = self.policy_conv(x, leaky_relu=leaky_relu)
-        pol = self.policy_fc(torch.flatten(pol, start_dim=1))
+        pol = self.policy_fc(t.flatten(pol, start_dim=1))
 
         # value head
         val = self.value_conv(x, leaky_relu=leaky_relu)
         if leaky_relu:
-            val = F.leaky_relu(self.value_fc_1(torch.flatten(val, start_dim=1)), inplace=True)
+            val = F.leaky_relu(self.value_fc_1(t.flatten(val, start_dim=1)), inplace=True)
         else:
-            val = F.relu(self.value_fc_1(torch.flatten(val, start_dim=1)), inplace=True)
-        val = torch.tanh(self.value_fc_2(val))
+            val = F.relu(self.value_fc_1(t.flatten(val, start_dim=1)), inplace=True)
+        val = t.tanh(self.value_fc_2(val))
 
-        return pol, val, torch.stack(resids), torch.stack(block_activations)
+        return pol, val, t.stack(resids), t.stack(block_outputs), t.stack(mid_block)
 
     def to_leela_weights(self, filename: str):
         """
@@ -277,7 +280,7 @@ class Network(nn.Module):
         weights = []
         weights.append(Network.tensor_to_leela_weights(conv_block.conv.weight))
         # calculate beta * sqrt(var - eps)
-        bias = conv_block.beta * torch.sqrt(
+        bias = conv_block.beta * t.sqrt(
             conv_block.bn.running_var - conv_block.bn.eps  # type: ignore
         )
         weights.append(Network.tensor_to_leela_weights(bias))
@@ -297,7 +300,7 @@ class Network(nn.Module):
         beta = Network.leela_weights_to_tensor(f.readline())
         running_mean = Network.leela_weights_to_tensor(f.readline())
         running_var = Network.leela_weights_to_tensor(f.readline())
-        # beta = beta / torch.sqrt(running_var - conv_block.bn.eps)
+        # beta = beta / t.sqrt(running_var - conv_block.bn.eps)
 
         # Subtract the biases from the means
         running_mean -= beta
@@ -325,9 +328,9 @@ class Network(nn.Module):
         return state_dict
 
     @staticmethod
-    def tensor_to_leela_weights(t: torch.Tensor) -> str:
+    def tensor_to_leela_weights(t: t.Tensor) -> str:
         return " ".join([str(w) for w in t.detach().numpy().ravel()]) + "\n"
 
     @staticmethod
-    def leela_weights_to_tensor(s: str) -> torch.Tensor:
-        return torch.tensor([float(w) for w in s.split()])
+    def leela_weights_to_tensor(s: str) -> t.Tensor:
+        return t.tensor([float(w) for w in s.split()])

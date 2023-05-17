@@ -1,14 +1,10 @@
 #%%
-import os
 import torch
 import LeelaZero
 from parse_leela_data import Dataset
-import pandas as pd
-from einops import rearrange
-from torchviz import make_dot
 import plotly.express as px
 import importlib
-from utils import print_go_board_tensor, display_tensor_grid, tensor_symmetries, point_symmetries
+from utils import print_go_board_tensor, display_tensor_grid, tensor_symmetries
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #%%
@@ -167,62 +163,3 @@ for chan_idx in range(channel_count):
         pass
 
 plot_patch_results(bar=True, y=patched_vals, labels={'x': 'Channel', 'y': 'Board value'}, title=f'Patching broken cycle into cycle, by channel (at every layer) (residualified)')
-
-#%%
-# TRAIN the INPUT to maximize a neuron's activation
-class ParseTrainedInput(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-    def forward(self, x):
-        x = torch.nn.functional.tanh(x)
-        layer_0 = torch.maximum(x, torch.zeros_like(x)).unsqueeze(0)
-        layers_1_7 = torch.zeros_like(x).repeat(7, 1, 1)
-        layer_8 = torch.maximum(-x, torch.zeros_like(x)).unsqueeze(0)
-        layers_9_15 = torch.zeros_like(x).repeat(7, 1, 1)
-        layer_16 = torch.full_like(x, fill_value=torch.max(x).item()).unsqueeze(0)
-        # layer_16 = torch.ones_like(x).unsqueeze(0)
-        layer_17 = torch.zeros_like(x).unsqueeze(0)
-        input = torch.cat((layer_0, layers_1_7, layer_8, layers_9_15, layer_16, layer_17), dim=0).unsqueeze(0)
-        threshold = 0.8
-        rounded_input = torch.where(input > threshold, torch.ones_like(input), torch.zeros_like(input))
-        # input = tensor_symmetries(input) # 8 symmetries
-        return input, rounded_input
-
-trained_input = torch.randn((19, 19), requires_grad=True, device=device) #, fill_value=0.0)
-parser = ParseTrainedInput()
-optimizer = torch.optim.Adam([trained_input], lr=0.2)
-neuron_layer, neuron_channel = 10, 1 # layer -1 for input_cov
-# coords = torch.tensor([(2, 15), (3, 15), (4, 15), (5, 15)], dtype=torch.long, device=device)
-# coords = [(2, 15)]
-# coords = point_symmetries(2, 15)[0]
-# print("coords", coords)
-# coords_tensor = torch.tensor(coords, dtype=torch.long, device=device)
-loss_history = []
-other_activations_history = []
-network.train()
-
-print(f"Optimising for layer {neuron_layer}, channel {neuron_channel}, coords {None}")
-for i in range(5000):
-    optimizer.zero_grad()
-    input, rounded_input = parser(trained_input)
-    _, _, resids, _ = network(input)
-    channel_activations = resids[neuron_layer + 1, :, neuron_channel]
-    # coords_activations = channel_activations[tuple(range(len(coords))), tuple(coords_tensor[:, 1]), tuple(coords_tensor[:, 0])]
-    # print("coords activations", coords_activations.shape)
-    # other_activations = torch.sum(resids[neuron_layer + 1]) - torch.sum(coords_activations)
-    loss = -torch.sum(channel_activations)
-    # other_activations = torch.sum(resids[neuron_layer + 1]) - torch.sum(channel_activations)
-    # loss = other_activations * 0.0005 - torch.mean(channel_activations)
-    loss_history.append(loss.item())
-    # other_activations_history.append(-other_activations.item())
-    loss.backward()
-    optimizer.step()
-
-display_tensor_grid(resids[neuron_layer + 1, 0])
-print("TRAINED INPUT")
-px.imshow(trained_input.detach().cpu().numpy(), origin="lower").show()
-print_go_board_tensor(rounded_input, 'b', coords=None)
-# show_layer_activations(parser(trained_input), boards_width=4, boards_height=5)
-px.line(loss_history, height=300).show()
-px.line(other_activations_history, height=300).show()
-# %%

@@ -119,7 +119,7 @@ def transform_move_prob_plane(
 
 
 class Dataset:
-    def __init__(self, filenames: List[str], transform: bool = False, fill_blanks: bool = True):
+    def __init__(self, filenames: List[str], transform: bool = False, fill_blanks: bool = False):
         self.transform = transform
         stone_planes: List[np.ndarray] = []
         turn_planes: List[int] = []
