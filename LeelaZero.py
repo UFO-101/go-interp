@@ -126,21 +126,23 @@ class Network(nn.Module):
     def forward(self, x, leaky_relu:bool=False, input_block:int=0):
         resids = []
         block_outputs = []
-        mid_block = []
+        resids_and_mids = []
 
         # first conv layer
         if input_block <= 0: 
             x = self.conv_input(x, leaky_relu=leaky_relu)
             resids.append(x.detach().clone())
+            resids_and_mids.append(x.detach().clone())
 
         # residual tower
         for layer in self.residual_tower[input_block:]:
             layer_output, intermediate = layer(x, leaky_relu=leaky_relu)
             # block_outputs.append(intermediate.detach().clone())
             block_outputs.append(layer_output.detach().clone())
-            mid_block.append(intermediate.detach().clone())
+            resids_and_mids.append(intermediate.detach().clone())
             x = x + layer_output
             resids.append(x)
+            resids_and_mids.append(x)
 
         # policy head
         pol = self.policy_conv(x, leaky_relu=leaky_relu)
@@ -154,7 +156,7 @@ class Network(nn.Module):
             val = F.relu(self.value_fc_1(t.flatten(val, start_dim=1)), inplace=True)
         val = t.tanh(self.value_fc_2(val))
 
-        return pol, val, t.stack(resids), t.stack(block_outputs), t.stack(mid_block)
+        return pol, val, t.stack(resids), t.stack(block_outputs), t.stack(resids_and_mids)
 
     def to_leela_weights(self, filename: str):
         """
