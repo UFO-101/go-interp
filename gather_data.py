@@ -33,7 +33,8 @@ def board_state_to_2d_tensors(board):
 def get_board_and_leela_input(game):
     board, plays = sgf_moves.get_setup_and_moves(game)
     game_len = len(plays)
-
+    if game_len < 1:
+        return None, None
     sample_len = random.randint(1, game_len)
     b_tensors, w_tensors = [], []
     color = None
@@ -49,11 +50,14 @@ def get_board_and_leela_input(game):
                 b_tensors.append(b_tensor)
                 w_tensors.append(w_tensor)
     except Exception as e:
-        print("ERROR", e)
-        print("plays", plays)
+        return None, None
 
     b_tensors.reverse(), w_tensors.reverse()
-    b_tensors += [t.zeros_like(b_tensors[0])] * (8 - len(b_tensors))
+    try:
+        b_tensors += [t.zeros_like(b_tensors[0])] * (8 - len(b_tensors))
+    except Exception as e:
+        return None, None
+
     w_tensors += [t.zeros_like(w_tensors[0])] * (8 - len(w_tensors))
     move_tensors = w_tensors + b_tensors if color == 'b' else b_tensors + w_tensors
     b_turn_tensors = [t.ones_like(move_tensors[0]), t.zeros_like(move_tensors[0])]
@@ -140,6 +144,8 @@ def file_to_data(path):
     boards, leela_inputs = [], []
     for game in games:
         board, leela_input = get_board_and_leela_input(game)
+        if board is None or leela_input is None:
+            continue
         boards.append(board)
         leela_inputs.append(leela_input)
     
@@ -179,6 +185,8 @@ def process_file(file_path, out_dir):
 def main(input_dir, output_dir):
     pool = Pool(cpu_count())  # Create a multiprocessing Pool
     file_paths = [os.path.join(root, file) for root, _, files in os.walk(input_dir) for file in files]
+    # Filter for .sgf and .sgfs files
+    file_paths = [file_path for file_path in file_paths if file_path.endswith(".sgf") or file_path.endswith(".sgfs")]
     print("File paths len", len(file_paths))
     print("File paths", file_paths[:10])
     # results = pool.map(process_file, file_paths)
@@ -197,8 +205,8 @@ def main(input_dir, output_dir):
 # main(input_dir, output_dir)
 
 if __name__ == "__main__":
-    input_dir = "/data/victimplay/ttseng-avoid-pass-alive-coldstart-39-20221025-175949/selfplay"
-    output_dir = "/weka/linear-probing/goattack-training-parsed"
+    input_dir = "/data/victimplay/tony-cyc-adv-ft-vs-b60-s7702m-20230518-185923"
+    output_dir = "/weka/linear-probing/goattack-training-parsed/tony-cyc-adv-ft-vs-b60-s7702m-20230518-185923"
     main(input_dir, output_dir)
 
 # print("Game len", game_len, "Sample len", sample_len)
@@ -217,18 +225,25 @@ class ProbeDataset(Dataset):
     def __getitem__(self, idx):
         return self.inputs[idx], self.labels[idx]
 
-def get_data_loader(type, batch_size=64):
-    parsed_data = t.load("/Users/josephmiller/Documents/go-interp/parsed_data/tensor_dict.pt")
-    print(len(parsed_data))
+def get_data_loader(type, input_path, batch_size=16):
+    file_paths = [os.path.join(root, file) for root, _, files in os.walk(input_path) for file in files]
+    print("File paths len", len(file_paths))
 
     combined_leela_inputs = []
     combined_liberties = []
     combined_cycles = []
-
-    for file_path, (leela_inputs, liberties, cycles) in parsed_data.items():
-        combined_leela_inputs.extend(leela_inputs)
-        combined_liberties.extend(liberties)
-        combined_cycles.extend(cycles)
+    for path in tqdm(file_paths):
+        parsed_data = t.load(path)
+        if len(parsed_data) != 3:
+            for leela_inputs, liberties, cycles in parsed_data:
+                combined_leela_inputs.extend(leela_inputs)
+                combined_liberties.extend(liberties)
+                combined_cycles.extend(cycles)
+        else:
+            leela_inputs, liberties, cycles = parsed_data
+            combined_leela_inputs.extend(leela_inputs)
+            combined_liberties.extend(liberties)
+            combined_cycles.extend(cycles)
 
     if type == "liberties":
         dataset = ProbeDataset(combined_leela_inputs, combined_liberties)
@@ -236,7 +251,10 @@ def get_data_loader(type, batch_size=64):
     else:
         dataset = ProbeDataset(combined_leela_inputs, combined_cycles)
 
-    train_data, test_data = random_split(dataset, [0.9, 0.1])
+    proportions = [0.9, 0.1]
+    lengths = [int(p * len(dataset)) for p in proportions]
+    lengths[-1] = len(dataset) - sum(lengths[:-1])
+    train_data, test_data = random_split(dataset, lengths)
 
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
