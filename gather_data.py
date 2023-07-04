@@ -247,7 +247,8 @@ def get_data_loader(type, input_path, batch_size=16):
 
     if type == "liberties":
         dataset = ProbeDataset(combined_leela_inputs, combined_liberties)
-
+    elif type == "all-raw":
+        return combined_leela_inputs, combined_liberties, combined_cycles
     else:
         dataset = ProbeDataset(combined_leela_inputs, combined_cycles)
 
@@ -260,3 +261,4 @@ def get_data_loader(type, input_path, batch_size=16):
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
 
     return train_loader, test_loader
+
